@@ -1,0 +1,302 @@
+
+from ll1 import log
+from ll1 import parser
+from ll1 import parse_table
+
+def ll1_init(grammar, start_sym, epsilon_sym, lexemes):
+    table = parse_table.ll1_parse_table(grammar, start_sym, epsilon_sym)
+    return parser.ll1_parser(lexemes, table)
+
+
+def ll1_load_grammar(grammar_filename, start_sym, epsilon_sym):
+
+    lexemes = []
+    rule_map = {}
+    file = open(grammar_filename)
+    if file != None:
+        i = 0
+        lines = file.read().split('$')
+        for line in lines:
+            production = line.split(':=')
+            if len(production) == 2:
+
+                symbol = production[0].strip()
+                rule_list = []
+                has_rule = True
+
+                for rules in production[1].split('|'):
+                    rule = []
+                    rules = rules.strip()
+                    if rules[0] == '\'':
+                        definition = rules.split('\'')
+                        if len(definition) == 3:
+                            if symbol.lower().strip() == 'none':
+                                symbol = None
+                            lexemes.append((symbol, str(definition[1])))
+                            has_rule = False
+                    else:
+                        for rule_symbol in rules.split(' '):
+                            if rule_symbol != '':
+                                rule.append(rule_symbol)
+                        rule_list.append(rule)
+                if has_rule:
+                    rule_map[symbol] = rule_list
+    else:
+        print("Could not open Grammar File ", grammar_filename)
+        return None
+    return ll1_init(rule_map, start_sym, epsilon_sym, lexemes)
+import re
+
+def lex(input, token_definitions):
+    tokens = []
+    i = 0
+    while i < len(input):
+        regex_match = None
+        for token_expr in token_definitions:
+
+            token_tag, regex_pattern = token_expr
+            regex_obj = re.compile(regex_pattern)
+
+            regex_match = regex_obj.match(input, i)
+            if regex_match:
+                lexeme = regex_match.group(0)
+                if token_tag != None:
+                    tokens.append((token_tag, lexeme))
+                break
+
+        if regex_match:
+            j = regex_match.end(0)
+            if i is j:
+                break
+            else:
+                i = j
+        else:
+            raise PermissionError()
+    return tokens
+import sys
+
+
+DEBUG = True
+
+def error(msg):
+	# print red text msg
+ 	sys.stderr.write('\n\033[31mPARSER ERROR: {}\033[23m'.format(str(msg)))
+
+def debug(msg):
+	if DEBUG: # print debug blue
+		print ('\n\033[94m{}\033[23m'.format(str(msg)))
+
+
+def write(msg):
+	if DEBUG: # print
+		print ('\033[23m{}'.format( str(msg)))
+class ll1_parse_table(dict):
+
+    def __init__(self, grammer, start_sym, epsilon_sym):
+        self.grammer = grammer
+
+        self.START = start_sym
+        self.EPSILON = epsilon_sym
+        self.EOI = 'EOI'
+        self.construct()
+
+    def __repr__(self):
+        table = 'Parse Table\n'
+        for symbol in self.keys():
+            table += symbol + ':\n'
+            for first in self[symbol].keys():
+                rule = ''
+                line = '\t' + '{:<10}'.format(first + ':')
+                for r in self[symbol][first]:
+                    rule += r + ' '
+                table += line + '[' + rule + ']\n'
+        return table
+
+    def construct(self):
+        for symbol in self.grammer.keys():
+            self[symbol] = {}
+
+            firsts = self.first_set(symbol)
+            follows = self.follow_set(symbol)
+            for first in firsts:
+
+                for rule in self.grammer[symbol]:
+                    if first in self.first_set(rule[0]):
+                        if first not in self[symbol]:
+                            if first == self.EPSILON:
+
+                                for follow in follows:
+                                    self[symbol][follow] = [first]
+                            else:
+                                self[symbol][first] = rule
+                        else:
+
+                            raise BrokenPipeError()
+
+    def first_set(self, symbol):
+        firsts = []
+        if symbol in self.grammer:
+            rule_set = self.grammer[symbol]
+            for rule in rule_set:
+
+                if len(rule) > 0 and (rule[0] != symbol):
+                    firsts = firsts + self.first_set(rule[0])
+        else:
+
+            firsts.append(symbol)
+        return firsts
+
+    def follow_set(self, symbol):
+        follows = []
+
+        if symbol == self.START:
+            follows.append(self.EOI)
+        for rule_symbol in self.grammer.keys():
+
+            for rule in self.grammer[rule_symbol]:
+                i = 0
+
+                while i < len(rule):
+                    if rule[i] == symbol:
+                        if i + 1 < len(rule):
+                            if rule[i + 1] not in self.grammer:
+                                follows.append(rule[i + 1])
+                            else:
+                                for first in self.first_set(rule[i + 1]):
+                                    if first == self.EPSILON:
+
+                                        follows = follows + [x for x in iter(self.follow_set(rule_symbol)) if
+                                                             x not in follows]
+                                    elif first not in follows:
+                                        follows.append(first)
+
+                        elif rule_symbol != symbol:
+
+                            follows = follows + [x for x in iter(self.follow_set(rule_symbol)) if x not in follows]
+                    i = i + 1
+        return follows
+from ll1 import lexer, log
+
+
+class ll1_parser(object):
+    def __init__(self, lexemes, parse_table):
+        self.table = parse_table
+        self.lexemes = lexemes
+
+    def parse(self, input):
+        tokens = lexer.lex(input, self.lexemes)
+        if len(tokens) <= 0:
+            log.error('No TOKENS')
+            return None
+
+        tokens.append((self.table.EOI, None))
+        self.validate(tokens)
+
+        root = self.parse_token([self.table.START, None], tokens)
+        return root
+
+    def parse_token(self, root, tokens):
+        if len(tokens) <= 0: return root
+
+        if root != None:
+            root_tag = root[0]
+            root_value = root[1]
+            next_token = tokens[0]
+            next_tag = next_token[0]
+            next_value = next_token[1]
+            if root_tag == next_tag:
+                tokens.pop(0)
+                return next_token
+            elif root_tag in self.table and next_tag in self.table[root[0]]:
+                value = []
+                if self.table[root_tag][next_tag] == None:
+                    log.error('ERROR: No Rule for ROOT:' + str(root_tag))
+                    return None
+
+                for rule_tag in self.table[root_tag][next_tag]:
+
+                    if rule_tag != self.table.EPSILON:
+
+                        rule_token = self.parse_token([rule_tag, None], tokens)
+
+                        if rule_token != None and len(rule_token) > 1:
+
+                            value.append(rule_token)
+                        else:
+                            log.error("Could not parse rule")
+                            return None
+                    else:
+                        value.append(None)
+                root[1] = value
+        return root
+
+    def validate(self, tokens):
+        token_stack = [(self.table.START, None)]
+        index = 0
+        valid = True
+        while len(token_stack) > 0 and valid:
+            top_token = token_stack[-1]
+            if top_token[0] == tokens[index][0]:
+                token_stack.pop()
+                index += 1
+            elif tokens[index][0] in self.table[top_token[0]]:
+                rule = []
+                for symbol in self.table[top_token[0]][tokens[index][0]]:
+                    rule.append(symbol)
+                token_stack.pop()
+                if rule[0] != self.table.EPSILON:
+                    while len(rule) > 0:
+                        token_stack.append((rule[-1], None))
+                        rule.pop()
+            else:
+                valid = False
+        if valid:
+            log.debug('VALIDATION: SUCCESS')
+
+        return valid
+
+    def print_tree(self, root):
+        print(self.print_tree_str(root))
+
+    def print_tree_str(self, root, i=0):
+        if root is not None:
+            tag = root[0]
+            value_list = root[1]
+            if tag in self.table:
+                if value_list is not None:
+                    for value in value_list:
+                        try:
+                            if value[1][0] is not None:
+                                print(list(self.table.keys()).index(value[0]))
+                        except:
+                            pass
+                        self.print_tree_str(value, i + 1)
+
+        return ''
+
+from ll1 import parse_table
+from ll1 import parser
+from ll1 import *
+from ll1 import log
+
+def main():
+    with open('input.txt') as f:
+        lines = f.readlines()
+
+    try:
+        ll1_parser = ll1_load_grammar('grammar.txt', 'START', 'EPSILON')
+        for line in lines:
+            try:
+                parse_root = ll1_parser.parse(line)
+
+                ll1_parser.print_tree(parse_root)
+            except PermissionError:
+                log.debug("VALIDATION: FAILURE")
+    except BrokenPipeError:
+        log.debug("GRAMMAR INVALID FOR LL1")
+
+    print(ll1_parser.table)
+
+
+if __name__ == "__main__":
+    main()
